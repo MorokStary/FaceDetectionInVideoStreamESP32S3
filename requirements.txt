@@ -1,0 +1,8 @@
+opencv-python
+numpy
+psutil
+streamlit
+pillow
+facenet-pytorch
+ultralytics
+torch
