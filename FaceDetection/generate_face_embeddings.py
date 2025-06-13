@@ -83,5 +83,6 @@ def save_embeddings_from_directory(directory_path):
 # │   ├── img2.jpg
 # │   └── ...
 # └── ...
-directory_path = "/path/to/directory" #Enter your directory path here  
-save_embeddings_from_directory(directory_path)
+if __name__ == "__main__":
+    directory_path = "/path/to/directory"  # Enter your directory path here
+    save_embeddings_from_directory(directory_path)
