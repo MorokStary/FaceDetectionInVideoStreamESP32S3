@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import os
 import pickle
+import platform
+from datetime import datetime
 from tempfile import NamedTemporaryFile
 from typing import Dict, List, Tuple
 
 import cv2
 import numpy as np
+import psutil
 import streamlit as st
 from PIL import Image
 from facenet_pytorch import MTCNN, InceptionResnetV1
@@ -151,6 +154,37 @@ def recognise_in_video(
     return output.name, identified
 
 
+def display_metrics() -> None:
+    """Show various system metrics."""
+    st.subheader("System information")
+    st.write(f"Platform: {platform.system()} {platform.release()}")
+    st.write(f"Python: {platform.python_version()}")
+    st.write(f"Boot time: {datetime.fromtimestamp(psutil.boot_time()).strftime('%Y-%m-%d %H:%M:%S')}")
+
+    st.subheader("CPU usage")
+    st.metric("Total", psutil.cpu_percent())
+    per_core = psutil.cpu_percent(percpu=True)
+    for idx, pct in enumerate(per_core):
+        st.metric(f"Core {idx}", pct)
+
+    st.subheader("Memory")
+    mem = psutil.virtual_memory()
+    st.metric("Used (%)", mem.percent)
+    st.metric("Total (GB)", round(mem.total / 1024**3, 2))
+    st.metric("Available (GB)", round(mem.available / 1024**3, 2))
+
+    st.subheader("Disk")
+    disk = psutil.disk_usage("/")
+    st.metric("Usage (%)", disk.percent)
+    st.metric("Total (GB)", round(disk.total / 1024**3, 2))
+    st.metric("Free (GB)", round(disk.free / 1024**3, 2))
+
+    st.subheader("Network")
+    net = psutil.net_io_counters()
+    st.metric("Sent (MB)", round(net.bytes_sent / 1024**2, 2))
+    st.metric("Recv (MB)", round(net.bytes_recv / 1024**2, 2))
+
+
 def main() -> None:
     st.title("Face recognition demo")
 
@@ -160,74 +194,79 @@ def main() -> None:
     detector, mtcnn, resnet = load_models()
     embeddings = load_embeddings()
 
-    st.markdown(f"**Lock status:** {st.session_state['lock_state']}")
+    tabs = st.tabs(["Recognition", "Metrics"])
+    with tabs[0]:
+        st.markdown(f"**Lock status:** {st.session_state['lock_state']}")
 
-    st.sidebar.header("Add new user")
-    name = st.sidebar.text_input("Name")
-    images = st.sidebar.file_uploader(
-        "Face images", accept_multiple_files=True, type=["png", "jpg", "jpeg"]
-    )
-    if st.sidebar.button("Add user"):
-        if not name or not images:
-            st.sidebar.error("Provide name and at least one image")
-        else:
-            pics = [Image.open(img) for img in images]
-            embs = compute_embeddings(pics, detector, mtcnn, resnet)
-            if embs:
-                embeddings[name] = embs
-                save_embeddings(embeddings)
-                st.sidebar.success(f"Embeddings saved for {name}")
-            else:
-                st.sidebar.error("No faces detected in images")
-
-    st.sidebar.header("Manage users")
-    if embeddings:
-        selected = st.sidebar.selectbox("Select user", list(embeddings.keys()))
-        if st.sidebar.button("Delete user"):
-            embeddings.pop(selected, None)
-            save_embeddings(embeddings)
-            st.sidebar.success(f"{selected} removed")
-
-        update_images = st.sidebar.file_uploader(
-            "Update images",
-            accept_multiple_files=True,
-            type=["png", "jpg", "jpeg"],
-            key="update_images",
+        st.sidebar.header("Add new user")
+        name = st.sidebar.text_input("Name")
+        images = st.sidebar.file_uploader(
+            "Face images", accept_multiple_files=True, type=["png", "jpg", "jpeg"]
         )
-        if st.sidebar.button("Update user"):
-            if not update_images:
-                st.sidebar.error("Provide at least one image")
+        if st.sidebar.button("Add user"):
+            if not name or not images:
+                st.sidebar.error("Provide name and at least one image")
             else:
-                pics = [Image.open(img) for img in update_images]
+                pics = [Image.open(img) for img in images]
                 embs = compute_embeddings(pics, detector, mtcnn, resnet)
                 if embs:
-                    embeddings[selected] = embs
+                    embeddings[name] = embs
                     save_embeddings(embeddings)
-                    st.sidebar.success(f"{selected} updated")
+                    st.sidebar.success(f"Embeddings saved for {name}")
                 else:
                     st.sidebar.error("No faces detected in images")
-    else:
-        st.sidebar.info("No users in database")
 
-    st.header("Recognise faces in video")
-    video = st.file_uploader("Upload video", type=["mp4", "mov", "avi"])
-    if video is not None:
-        tmp = NamedTemporaryFile(delete=False)
-        tmp.write(video.read())
-        tmp.close()
-        result_path, identified = recognise_in_video(
-            tmp.name, detector, mtcnn, resnet, embeddings
-        )
-        if result_path:
-            st.video(result_path)
-            if identified:
-                st.success("Person identified")
-                st.session_state["lock_state"] = "Unlock"
-            else:
-                st.warning("Person not identified")
-                st.session_state["lock_state"] = "Lock"
+        st.sidebar.header("Manage users")
+        if embeddings:
+            selected = st.sidebar.selectbox("Select user", list(embeddings.keys()))
+            if st.sidebar.button("Delete user"):
+                embeddings.pop(selected, None)
+                save_embeddings(embeddings)
+                st.sidebar.success(f"{selected} removed")
+
+            update_images = st.sidebar.file_uploader(
+                "Update images",
+                accept_multiple_files=True,
+                type=["png", "jpg", "jpeg"],
+                key="update_images",
+            )
+            if st.sidebar.button("Update user"):
+                if not update_images:
+                    st.sidebar.error("Provide at least one image")
+                else:
+                    pics = [Image.open(img) for img in update_images]
+                    embs = compute_embeddings(pics, detector, mtcnn, resnet)
+                    if embs:
+                        embeddings[selected] = embs
+                        save_embeddings(embeddings)
+                        st.sidebar.success(f"{selected} updated")
+                    else:
+                        st.sidebar.error("No faces detected in images")
         else:
-            st.error("Could not read video")
+            st.sidebar.info("No users in database")
+
+        st.header("Recognise faces in video")
+        video = st.file_uploader("Upload video", type=["mp4", "mov", "avi"])
+        if video is not None:
+            tmp = NamedTemporaryFile(delete=False)
+            tmp.write(video.read())
+            tmp.close()
+            result_path, identified = recognise_in_video(
+                tmp.name, detector, mtcnn, resnet, embeddings
+            )
+            if result_path:
+                st.video(result_path)
+                if identified:
+                    st.success("Person identified")
+                    st.session_state["lock_state"] = "Unlock"
+                else:
+                    st.warning("Person not identified")
+                    st.session_state["lock_state"] = "Lock"
+            else:
+                st.error("Could not read video")
+
+    with tabs[1]:
+        display_metrics()
 
 
 if __name__ == "__main__":
