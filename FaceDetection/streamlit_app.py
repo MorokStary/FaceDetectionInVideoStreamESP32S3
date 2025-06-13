@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import pickle
 from tempfile import NamedTemporaryFile
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 import cv2
 import numpy as np
@@ -84,11 +84,21 @@ def compute_embeddings(images: List[Image.Image], detector: YOLO, mtcnn: MTCNN, 
     return embeddings
 
 
-def recognise_in_video(path: str, detector: YOLO, mtcnn: MTCNN, resnet: InceptionResnetV1, known: Dict[str, List[np.ndarray]]) -> str:
-    """Process a video file and save annotated copy."""
+def recognise_in_video(
+    path: str,
+    detector: YOLO,
+    mtcnn: MTCNN,
+    resnet: InceptionResnetV1,
+    known: Dict[str, List[np.ndarray]],
+) -> Tuple[str, bool]:
+    """Process a video file and save annotated copy.
+
+    Returns the path to the annotated video and a flag indicating if any known
+    face was identified.
+    """
     cap = cv2.VideoCapture(path)
     if not cap.isOpened():
-        return ""
+        return "", False
 
     fps = cap.get(cv2.CAP_PROP_FPS) or 10
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -98,6 +108,7 @@ def recognise_in_video(path: str, detector: YOLO, mtcnn: MTCNN, resnet: Inceptio
     writer = cv2.VideoWriter(
         output.name, cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height)
     )
+    identified = False
 
     while True:
         ret, frame = cap.read()
@@ -119,6 +130,8 @@ def recognise_in_video(path: str, detector: YOLO, mtcnn: MTCNN, resnet: Inceptio
                     .flatten()
                 )
                 name = compare_embeddings(emb, known)
+                if name != "Unknown":
+                    identified = True
             else:
                 name = "Unknown"
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
@@ -135,14 +148,19 @@ def recognise_in_video(path: str, detector: YOLO, mtcnn: MTCNN, resnet: Inceptio
 
     writer.release()
     cap.release()
-    return output.name
+    return output.name, identified
 
 
 def main() -> None:
     st.title("Face recognition demo")
 
+    if "lock_state" not in st.session_state:
+        st.session_state["lock_state"] = "Lock"
+
     detector, mtcnn, resnet = load_models()
     embeddings = load_embeddings()
+
+    st.markdown(f"**Lock status:** {st.session_state['lock_state']}")
 
     st.sidebar.header("Add new user")
     name = st.sidebar.text_input("Name")
@@ -162,15 +180,52 @@ def main() -> None:
             else:
                 st.sidebar.error("No faces detected in images")
 
+    st.sidebar.header("Manage users")
+    if embeddings:
+        selected = st.sidebar.selectbox("Select user", list(embeddings.keys()))
+        if st.sidebar.button("Delete user"):
+            embeddings.pop(selected, None)
+            save_embeddings(embeddings)
+            st.sidebar.success(f"{selected} removed")
+
+        update_images = st.sidebar.file_uploader(
+            "Update images",
+            accept_multiple_files=True,
+            type=["png", "jpg", "jpeg"],
+            key="update_images",
+        )
+        if st.sidebar.button("Update user"):
+            if not update_images:
+                st.sidebar.error("Provide at least one image")
+            else:
+                pics = [Image.open(img) for img in update_images]
+                embs = compute_embeddings(pics, detector, mtcnn, resnet)
+                if embs:
+                    embeddings[selected] = embs
+                    save_embeddings(embeddings)
+                    st.sidebar.success(f"{selected} updated")
+                else:
+                    st.sidebar.error("No faces detected in images")
+    else:
+        st.sidebar.info("No users in database")
+
     st.header("Recognise faces in video")
     video = st.file_uploader("Upload video", type=["mp4", "mov", "avi"])
     if video is not None:
         tmp = NamedTemporaryFile(delete=False)
         tmp.write(video.read())
         tmp.close()
-        result_path = recognise_in_video(tmp.name, detector, mtcnn, resnet, embeddings)
+        result_path, identified = recognise_in_video(
+            tmp.name, detector, mtcnn, resnet, embeddings
+        )
         if result_path:
             st.video(result_path)
+            if identified:
+                st.success("Person identified")
+                st.session_state["lock_state"] = "Unlock"
+            else:
+                st.warning("Person not identified")
+                st.session_state["lock_state"] = "Lock"
         else:
             st.error("Could not read video")
 
